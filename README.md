@@ -6,4 +6,4 @@ its sill in development as of today (26th jan 2025)
 
 **lots of things to-do it does not even have a proper GUI rigt now**
 
-[changelog can be found here](/CHANGELOG.md)
+[changelog can be found here](./CHANGELOGS.md)
