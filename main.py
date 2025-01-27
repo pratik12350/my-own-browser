@@ -1,13 +1,20 @@
 import os
 import socket
 import ssl
-from urllib.parse import urlparse
 import urllib
 import urllib.parse
+import html
 
 class URL:
     def __init__(self, url) -> None:
+        if url.startswith("view-source:"):
+            self.is_view_source = True
+            url = url[12:]
+        else:
+            self.is_view_source = False
+        
         self.scheme, url = url.split("://", 1)
+
         assert self.scheme in ["http", "https", "file", "data"]
 
         if self.scheme == "http":
@@ -19,7 +26,6 @@ class URL:
         elif self.scheme == "data":
             self.data = url
 
-       
         if self.scheme in ["http", "https"]:
             if "/" not in url:
                 url = url + '/'
@@ -30,22 +36,24 @@ class URL:
                 self.host, port = self.host.split(':', 1)
                 self.port = int(port)
 
-
     def __add_headers(self, req, headers):
         for i in headers:
             req += f"{i[0]}: {i[1]}\r\n"
-
         return req
-
 
     def request(self):
         if self.scheme == "file":
             return self.load_file()
-        elif self.scheme == "http":
+        elif self.scheme == "http" or self.scheme == "https":
             return self.load_http()
         elif self.scheme == "data":
             return self.load_data()
+        elif self.is_view_source:
+            return self.load_source()
         
+    def load_source(self):
+        return self.load_http()
+
     def load_http(self):
         s = socket.socket(family=socket.AF_INET, proto=socket.IPPROTO_TCP, type=socket.SOCK_STREAM)
         s.connect((self.host, self.port))
@@ -63,13 +71,12 @@ class URL:
             ])
         final_req += "\r\n"
 
-        print(final_req)
         s.send(final_req.encode("utf8"))
 
         res = s.makefile('r', newline="\r\n", encoding="utf8")
 
         res_line = res.readline()
-        version, status, explaination = res_line.split(" ", 2)
+        version, status, explanation = res_line.split(" ", 2)
 
         res_headers = {}
         while True:
@@ -109,6 +116,11 @@ class URL:
         return content
 
 def show_body(body):
+    if body is None:
+        print("No content to display.")
+        return
+    
+    content = ''
     is_tag = False
     for char in body:
         if char == '<':
@@ -116,13 +128,18 @@ def show_body(body):
         elif char == '>':
             is_tag = False
         elif not is_tag:
-            print(char, end='')
+            content += char
+
+    content = html.unescape(content)
+    print(content)
 
 
 def load(url):
     body = url.request()
-    show_body(body)
-
+    if url.is_view_source:
+        print(body)
+    else:
+        show_body(body)
 
 
 if __name__ == "__main__":
