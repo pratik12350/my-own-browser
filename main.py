@@ -1,26 +1,34 @@
+import os
 import socket
 import ssl
+from urllib.parse import urlparse
+import urllib
+import urllib.parse
 
 class URL:
     def __init__(self, url) -> None:
         self.scheme, url = url.split("://", 1)
-        assert self.scheme in ["http", "https"]
+        assert self.scheme in ["http", "https", "file", "data"]
 
         if self.scheme == "http":
             self.port = 80
         elif self.scheme == "https":
             self.port = 443
+        elif self.scheme == "file":
+            self.path = url
+        elif self.scheme == "data":
+            self.data = url
 
        
+        if self.scheme in ["http", "https"]:
+            if "/" not in url:
+                url = url + '/'
+                self.host, url = url.split('/', 1)
+                self.path = '/' + url
 
-        if "/" not in url:
-            url = url + '/'
-            self.host, url = url.split('/', 1)
-            self.path = '/' + url
-
-        if ":" in self.host:
-            self.host, port = self.host.split(':', 1)
-            self.port = int(port)
+            if ":" in self.host:
+                self.host, port = self.host.split(':', 1)
+                self.port = int(port)
 
 
     def __add_headers(self, req, headers):
@@ -31,6 +39,14 @@ class URL:
 
 
     def request(self):
+        if self.scheme == "file":
+            return self.load_file()
+        elif self.scheme == "http":
+            return self.load_http()
+        elif self.scheme == "data":
+            return self.load_data()
+        
+    def load_http(self):
         s = socket.socket(family=socket.AF_INET, proto=socket.IPPROTO_TCP, type=socket.SOCK_STREAM)
         s.connect((self.host, self.port))
 
@@ -69,7 +85,28 @@ class URL:
 
         s.close()
         return content
+    
+    def load_file(self):
+        file_path = os.path.abspath(self.path)
+        if not os.path.isfile(file_path):
+            raise FileNotFoundError(f"File {file_path} not found")
+        
+        with open(file_path, "r", encoding="utf8") as f:
+            return f.read()
+        
+    def load_data(self):
+        if "," not in self.data:
+            raise ValueError("Invalid data URL")
+         
+        mime_type, data = self.data.split(",", 1)
+        mime_type = mime_type or "text/plain"  
 
+        if mime_type.startswith("text/"):
+            content = urllib.parse.unquote(data)
+        else:
+            raise ValueError("Unsupported MIME type provided")
+        
+        return content
 
 def show_body(body):
     is_tag = False
@@ -90,4 +127,11 @@ def load(url):
 
 if __name__ == "__main__":
     import sys
-    load(URL(sys.argv[1]))
+    default_file = "index.html"
+
+    if len(sys.argv) > 1:
+        url = URL(sys.argv[1])
+    else:
+        url = URL(f"file://{os.path.abspath(default_file)}")
+
+    load(url)
