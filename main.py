@@ -6,15 +6,15 @@ import urllib.parse
 import html
 
 class URL:
+    
     def __init__(self, url) -> None:
         if url.startswith("view-source:"):
             self.is_view_source = True
             url = url[12:]
         else:
             self.is_view_source = False
-        
-        self.scheme, url = url.split("://", 1)
 
+        self.scheme, url = url.split("://", 1)
         assert self.scheme in ["http", "https", "file", "data"]
 
         if self.scheme == "http":
@@ -23,18 +23,23 @@ class URL:
             self.port = 443
         elif self.scheme == "file":
             self.path = url
+            self.host = None
+            return
         elif self.scheme == "data":
             self.data = url
+            self.host = None
+            return
 
-        if self.scheme in ["http", "https"]:
-            if "/" not in url:
-                url = url + '/'
-                self.host, url = url.split('/', 1)
-                self.path = '/' + url
+        if "/" not in url:
+            url += '/'
+        self.host, self.path = url.split('/', 1)
+        self.path = '/' + self.path
 
-            if ":" in self.host:
-                self.host, port = self.host.split(':', 1)
-                self.port = int(port)
+        if ":" in self.host:
+            self.host, port = self.host.split(':', 1)
+            self.port = int(port)
+        else:
+            self.port = 80 if self.scheme == "http" else 443
 
         self.socket = None
 
@@ -57,58 +62,63 @@ class URL:
         return self.load_http()
 
     def load_http(self):
-        # s = socket.socket(family=socket.AF_INET, proto=socket.IPPROTO_TCP, type=socket.SOCK_STREAM)
-        # s.connect((self.host, self.port))
+        MAX_REDIRECT = 6
+        REDIRECT_COUNT = 0
+        while MAX_REDIRECT > REDIRECT_COUNT:
 
-
-        if self.socket is None:
-            self.socket = socket.create_connection((self.host, self.port))
-
-
-        if self.scheme == "https":
-            ctx = ssl.create_default_context()
-            self.socket = ctx.wrap_socket(self.socket, server_hostname=self.host)
-
-        req = f"GET {self.path} HTTP/1.1\r\n"
-        req += f"Host: {self.host}\r\n"
+            if self.socket is None or self.is_socket_closed():
+                self.socket = socket.create_connection((self.host, self.port))
+                if self.scheme == "https":
+                    ctx = ssl.create_default_context()
+                    self.socket = ctx.wrap_socket(self.socket, server_hostname=self.host)
+            try:
+                req = f"GET {self.path} HTTP/1.1\r\n"
+                req += f"Host: {self.host}\r\n"
+                
+                final_req = self.__add_headers(req, [
+                    ("Connection", "keep-alive"),
+                    ("User-Agent", "Pratik's own browser/0.0.1 (github.com/pratik12350/my-own-browser)")
+                    ])
+                final_req += "\r\n"
         
-        final_req = self.__add_headers(req, [
-            ("Connection", "keep-alive"),
-            ("User-Agent", "Pratik's own browser/0.0.1 (github.com/pratik12350/my-own-browser)")
-            ])
-        final_req += "\r\n"
+                self.socket.sendall(final_req.encode("utf8"))
+        
+                res = self.socket.makefile('rb', newline="\r\n")
 
-        self.socket.sendall(final_req.encode("utf8"))
+                res_line = res.readline().decode("utf8").strip()
+                version, status, explanation = res_line.split(" ", 2)
 
-        res = self.socket.makefile('rb', newline="\r\n")
+                res_headers = {}
+                while True:
+                    line = res.readline().decode("utf8").strip()
+                    if line == "":
+                        break
+                    h, v = line.split(':', 1)
+                    res_headers[h.casefold()] = v.strip()
 
-        res_line = res.readline().decode("utf8").strip()
-        version, status, explanation = res_line.split(" ", 2)
+                if status.startswith("3") and "location" in res_headers:
+                    location = res_headers["location"]
+                    if location.startswith("http"):
+                        return URL(location).request()
+                    elif location.startswith("/"):
+                        self.path = location
+                    else:
+                        raise ValueError(f"Unsupported redirect URL: {location}")
+                    REDIRECT_COUNT += 1
+                    continue
+                elif "content-length" in res_headers:
+                    content_len = int(res_headers["content-length"])
+                    content = res.read(content_len).decode("utf8")
+                else:
+                    content = ""
 
-        res_headers = {}
-        while True:
-            line = res.readline().decode("utf8").strip()
-            if line == "":
-                break
-            h, v = line.split(':', 1)
-            res_headers[h.casefold()] = v.strip()
+                return content
+            except (socket.error, OSError) as e:
+                print("socket error", e)
+                self.socket = None
+                return None
 
-        if "content-length" in res_headers:
-            content_len = int(res_headers["content-length"])
-            content = res.read(content_len).decode("utf8")
-        else:
-            content = ""
-
-        return content
-
-
-        assert "transfer-encoding" not in res_headers
-        assert "content-encoding" not in res_headers
-
-        content = res.read()
-
-        s.close()
-        return content
+        raise ValueError(f"Too many redirects exceeded {MAX_REDIRECT}")
     
     def load_file(self):
         file_path = os.path.abspath(self.path)
@@ -131,6 +141,23 @@ class URL:
             raise ValueError("Unsupported MIME type provided")
         
         return content
+
+    def is_socket_closed(self):
+        if self.socket is None:
+            return True
+        try:
+            self.socket.settimeout(0)
+            data = self.socket.recv(1, socket.MSG_PEEK)
+            if not data:
+                return True
+        except BlockingIOError:
+            return False
+        except Exception:
+            return True
+        finally:
+            self.socket.settimeout(None)
+        return False
+
 
 def show_body(body):
     if body is None:
